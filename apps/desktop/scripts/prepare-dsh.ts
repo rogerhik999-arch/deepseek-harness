@@ -41,7 +41,9 @@ const STORE_ROOT = join(BUILD_ROOT, 'store')
 const RUNTIME_ROOT = BUILD_PATHS.runtime
 const PNPM_BUILD_STATE = BUILD_PATHS.dshPnpm
 const PACKAGE_SET_ROOT = BUILD_PATHS.packageSet
-const NODE = join(BUILD_PATHS.electron, process.platform === 'win32' ? 'electron.exe' : 'Electron.app/Contents/MacOS/Electron')
+const PREPARED_TARGET = resolveDesktopBuildTarget()
+const NODE = join(BUILD_PATHS.electron, PREPARED_TARGET.startsWith('linux-') ? 'electron'
+  : PREPARED_TARGET.startsWith('mac-') ? 'Electron.app/Contents/MacOS/Electron' : 'electron.exe')
 const PNPM = join(RUNTIME_ROOT, 'pnpm', 'bin', 'pnpm.mjs')
 
 function manifestVersion(path: string, subject: string): string {
