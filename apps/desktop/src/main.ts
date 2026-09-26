@@ -1162,8 +1162,12 @@ async function main(): Promise<void> {
       void (backend.state.phase === 'ready' ? openInitialWindow() : navigateMain(applicationUrl)).catch((error: unknown) => { reportFatal(error, 'main') })
       return
     }
-    // Startup and sign-out select the visible window before activation may reveal the workspace.
-    if (window === mainWindow && !enteredWorkspace) return
+    // Startup and sign-out keep the workspace page hidden; if the welcome window was already
+    // closed, the second-launch signal is the only way back on Linux, so reopen welcome here.
+    if (window === mainWindow && !enteredWorkspace) {
+      void showWelcome().catch((error: unknown) => { reportFatal(error, 'main') })
+      return
+    }
     if (window.isMinimized()) window.restore()
     window.show()
     window.focus()
