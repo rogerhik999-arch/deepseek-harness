@@ -78,6 +78,33 @@ sudo chmod 4755 "$ELECTRON_DIST/chrome-sandbox"
 
 两个客户端可同时运行（SQLite 为 WAL 模式）；极端情况下两边同时写入可能偶发冲突报错，重试即可。
 
+## 会话独占租约与排障
+
+会话的写所有权由内核 `flock(2)` 仲裁（实现见 `packages/session/session-persistence-jsonl/src/lease.ts`）：同一会话同一时刻只能被一个 dsh 进程驱动，后到者收到"会话已经被其他 dsh 占用"。锁随持有进程的退出自动释放，进程崩溃不留残留锁；租约刻意没有超时抢占，防止两个写入方交替追加撕坏会话日志。
+
+遇到占用报错时按以下顺序排查：
+
+1. 找出锁持有者：对每个 dsh 进程执行 `ls -la /proc/<pid>/fd | grep session.lock`，输出即其持有的会话。
+2. 特别留意**常驻的 Web 服务进程**：`dsh-web` 启动器拉起的 `dsh web` 服务启动后长期驻留，它服务过的会话租约在进程存活期间一直被持有——浏览器页面关闭不会释放。不用 Web 时应停止该进程（`pkill -f "bin.ts web"`）。
+3. 处理方式：关闭另一端打开的该会话，或停止占用进程，然后在本端重新打开会话。
+
+切勿删除 `session.lock` 文件：POSIX 锁以 inode 为准，删除活动会话的锁文件会让互斥彻底失效，两个进程同时写会损坏会话日志。
+
+## 遗留配置的一次性导入
+
+`~/.dsh/settings.yaml` 的历史配置在某个 Host 首次启动时被改名为 `settings.yaml.imported`，各段落（模型服务商定义 `llm-pi-ai`、默认模型路由 `agent-default-model`、UI 偏好）被导入**当时活动的 profile**，之后创建的 profile 不会自动获得这份导入。API key 的值存放在 home 级 `~/.dsh/.credentials.yaml`（按 env 名引用），天然跨 profile 共享，不随导入复制。
+
+为新 profile 重放导入（例如从 Web 切到桌面使用时）：
+
+```sh
+# 1. 停止所有 dsh 进程，避免导入落错 profile 或旧值覆盖已演化的配置
+# 2. 恢复遗留文件
+cp ~/.dsh/settings.yaml.imported ~/.dsh/settings.yaml
+# 3. 仅启动目标客户端：导入写入该 profile 的 cordis.patch.yml，文件自动改回 .imported
+```
+
+导入是覆盖式的：先启动目标客户端，避免其他 Host 抢先消费文件；导入后确认 `~/.dsh/settings.yaml` 已消失。
+
 ## 构建 Linux 安装包
 
 本分支同时启用了 linux-x64 打包目标：
