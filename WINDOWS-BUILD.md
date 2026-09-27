@@ -75,13 +75,21 @@ helper 直调命令(输入文档可用 `apps/desktop/tests/fixtures/office-conve
   --max-output-bytes 10485760 --max-image-resolution 300 --format pdf --recalculate false
 ```
 
-**解法**:把仓库临时改名为超短路径完成打包,再移回(同卷重命名瞬间完成,`.desktop-build` 缓存全部保留):
+**解法**:使用固定的短路径构建树 `D:\dsh`(推荐,2026-09-28 起):
 
 ```sh
-mv /d/AciLearn/DeepseekHarnessDesktop/deepseek-harness /d/dsh
-cd /d/dsh && CI=true PATH="/c/Windows/System32:$PATH" pnpm package:desktop:win:x64:unsigned
-mv /d/dsh /d/AciLearn/DeepseekHarnessDesktop/deepseek-harness
+# 一次性建立:从主检出本地克隆(对象硬链接,秒级),配置远端与本地配置
+git clone /d/AciLearn/DeepseekHarnessDesktop/deepseek-harness /d/dsh
+cd /d/dsh && git remote set-url origin https://github.com/rogerhik999-arch/deepseek-harness.git
+git remote add upstream https://github.com/deepseek-ai/deepseek-harness.git
+cp /d/AciLearn/DeepseekHarnessDesktop/deepseek-harness/apps/desktop/.env.windows apps/desktop/
+
+# 每次重打包:同步最新提交后直接打包(产物留在 D:\dsh,不回传主检出)
+cd /d/dsh && git pull origin master
+CI=true PATH="/c/Windows/System32:$PATH" pnpm package:desktop:win:x64:unsigned
 ```
+
+曾经用过的"临时改名移动法"(`mv` 仓库到 `D:\dsh` 打包再移回)已被弃用:主检出位于 ZCode 工作区内,构建产物落盘后常被 Defender/索引器长期占用目录锁,`mv` 频繁报 `Device or resource busy`。克隆出的构建树是一次性成本,之后完全免移动。
 
 **为什么 `subst` 虚拟盘符不行**:pnpm 与 Node 启动时会 realpath(`GetFinalPathNameByHandle`)还原真实路径,错误信息里路径仍是原始长路径,等于没做。junction 同理。
 
@@ -131,7 +139,7 @@ DSH_DESKTOP_NPM_REGISTRY=https://registry.npmmirror.com
 | 报错 | 根因 | 解法 |
 |---|---|---|
 | `tar (child): Cannot connect to D: resolve failed` | GNU tar 把盘符当远程主机 | PATH 前置 System32(bsdtar),见第 3 节 |
-| `Bootstrapping exception '...services.rdb: no such file'` + exit `3221225477` | 构建路径超 MAX_PATH 260 | 仓库临时改名短路径打包,见第 4 节 |
+| `Bootstrapping exception '...services.rdb: no such file'` + exit `3221225477` | 构建路径超 MAX_PATH 260 | 在短路径构建树 `D:\dsh` 打包,见第 4 节 |
 | `[ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY]` | 工作区移动后依赖元数据过期 | `CI=true pnpm install`,见第 5 节 |
 | `desktop package: cannot read .env.windows` | 缺本地打包配置 | 从 example 复制并按第 7 节填写 |
 | pre-push typecheck 失败但未改代码 | deps 状态检查先挂 | 见第 5 节 |
