@@ -207,6 +207,11 @@ function createWindow(preload: string, show = false, primary = false): BrowserWi
     minWidth: 520,
     minHeight: 600,
     show,
+    // Linux has no bundle or executable icon source: the window icon reaches the
+    // X11 taskbar directly and gives Wayland compositors the app_id artwork.
+    ...(primary && process.platform === 'linux' ? {
+      icon: join(app.isPackaged ? process.resourcesPath : join(app.getAppPath(), 'resources'), 'icon.png'),
+    } : {}),
     ...(process.platform === 'win32' && primary ? {
       titleBarStyle: 'hidden' as const,
       titleBarOverlay: { height: WINDOWS_TITLEBAR_HEIGHT, color: chromeFallbackFill(),
