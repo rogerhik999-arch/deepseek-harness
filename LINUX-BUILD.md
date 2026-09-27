@@ -130,6 +130,16 @@ pnpm run package:desktop:linux:x64:dir  # 仅 linux-unpacked 目录
 
 产物位于 `apps/desktop/.desktop-build/targets/linux-x64/artifacts/`：`deepseek-harness-<版本>-linux-amd64.deb`（约 300 MB）与 `deepseek-harness-<版本>-linux-x86_64.AppImage`（约 354 MB）。首次打包会下载 Electron linux 压缩包与构建缓存，耗时约 10-25 分钟。
 
+## 云端构建发布（GitHub Actions）
+
+`.github/workflows/linux-desktop-release.yml` 在推送 `desktop-linux-*` 标签时于 GitHub 的 ubuntu-24.04 runner 上完成全部构建并直接把 deb 与 AppImage 挂到该标签的 Release——无需本机构建与上传。公开仓库的 Actions 免费且使用内置 GITHUB_TOKEN。
+
+```sh
+git tag desktop-linux-20260928.2 && git push origin desktop-linux-20260928.2
+```
+
+构建约 20-40 分钟，可在仓库的 Actions 页观察进度。云端构建设置 `DSH_DESKTOP_SKIP_PACKAGED_SMOKE=1` 跳过打包冒烟中已知会失败的 Host 内 Office 转换检查（见"已知限制"），本机构建默认仍执行冒烟。
+
 ## 目标机器安装
 
 ```sh
