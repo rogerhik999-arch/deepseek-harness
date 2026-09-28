@@ -51,7 +51,9 @@ jobs:
           openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 3650 -nodes \
             -subj "/CN=Developer ID Application: DeepSeek Harness Local/OU=LOCALBUILD00/O=DeepSeek Harness Local Build/C=CN" \
             -addext "keyUsage=digitalSignature,keyCertSign" -addext "extendedKeyUsage=codeSigning"
-          openssl pkcs12 -export -legacy -out signing.p12 -inkey key.pem -in cert.pem -passout pass:ci-signing
+          # Runner LibreSSL lacks -legacy; its default export is already keychain-compatible.
+          openssl pkcs12 -export -legacy -out signing.p12 -inkey key.pem -in cert.pem -passout pass:ci-signing \
+            || openssl pkcs12 -export -out signing.p12 -inkey key.pem -in cert.pem -passout pass:ci-signing
           KEYCHAIN="$RUNNER_TEMP/dsh-signing.keychain-db"
           security create-keychain -p ci-keychain-pass "$KEYCHAIN"
           security set-keychain-settings -t 0 "$KEYCHAIN"
