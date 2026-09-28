@@ -71,6 +71,15 @@ jobs:
           set -euo pipefail
           security set-key-partition-list -S apple-tool:,apple: -s -k ci-keychain-pass "$RUNNER_TEMP/dsh-signing.keychain-db" > /dev/null
 
+      - name: Trust the local certificate for code signing
+        run: |
+          set -euo pipefail
+          # Admin-domain trust for the code-signing policy; without it electron-builder
+          # rejects the self-signed identity as CSSMERR_TP_NOT_TRUSTED.
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign \
+            -k /Library/Keychains/System.keychain "$RUNNER_TEMP/dsh-signing/cert.pem"
+          security find-identity -v -p codesigning "$RUNNER_TEMP/dsh-signing.keychain-db"
+
       - name: Register keychain and verify identity
         run: |
           set -euo pipefail
