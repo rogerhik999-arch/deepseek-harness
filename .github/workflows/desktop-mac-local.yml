@@ -79,7 +79,12 @@ jobs:
           # an explicit trust entry; add-trusted-cert is skipped (it can wait on headless UI).
           security list-keychains -s "$KEYCHAIN" "$HOME/Library/Keychains/login.keychain-db"
           security find-identity -v -p codesigning "$KEYCHAIN"
+          # Probe binary bound to the certificate, required by the macOS signature cache policy.
+          cp /bin/echo "$RUNNER_TEMP/dsh-signing/probe"
+          codesign --force --sign "Developer ID Application: DeepSeek Harness Local" --keychain "$KEYCHAIN" \
+            --timestamp --options runtime "$RUNNER_TEMP/dsh-signing/probe"
           echo "CSC_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+          echo "DSH_DESKTOP_MACOS_SIGNING_PROBE=$RUNNER_TEMP/dsh-signing/probe" >> "$GITHUB_ENV"
 
       - name: Apply local packaging patches (reverted after build)
         run: |
