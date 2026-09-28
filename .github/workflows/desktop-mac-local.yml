@@ -48,21 +48,30 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/dsh-signing"
           cd "$RUNNER_TEMP/dsh-signing"
+          echo "::group::openssl"
           openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 3650 -nodes \
             -subj "/CN=Developer ID Application: DeepSeek Harness Local/OU=LOCALBUILD00/O=DeepSeek Harness Local Build/C=CN" \
             -addext "keyUsage=digitalSignature,keyCertSign" -addext "extendedKeyUsage=codeSigning"
           # Runner LibreSSL lacks -legacy; its default export is already keychain-compatible.
           openssl pkcs12 -export -legacy -out signing.p12 -inkey key.pem -in cert.pem -passout pass:ci-signing \
             || openssl pkcs12 -export -out signing.p12 -inkey key.pem -in cert.pem -passout pass:ci-signing
+          echo "::endgroup::"
           KEYCHAIN="$RUNNER_TEMP/dsh-signing.keychain-db"
+          echo "::group::create+import"
           security create-keychain -p ci-keychain-pass "$KEYCHAIN"
+          security unlock-keychain -p ci-keychain-pass "$KEYCHAIN"
           security set-keychain-settings -t 0 "$KEYCHAIN"
           security import signing.p12 -k "$KEYCHAIN" -P ci-signing -T /usr/bin/codesign
+          echo "::endgroup::"
+          # The self-signed root in the same keychain is a valid codesigning identity without
+          # an explicit trust entry; add-trusted-cert is skipped (it can wait on headless UI).
+          echo "::group::partition-list"
           security set-key-partition-list -S apple-tool:,apple: -s -k ci-keychain-pass "$KEYCHAIN" > /dev/null
-          sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain cert.pem
+          echo "::endgroup::"
+          echo "::group::search-list+identity"
           security list-keychains -s "$KEYCHAIN" "$HOME/Library/Keychains/login.keychain-db"
-          security unlock-keychain -p ci-keychain-pass "$KEYCHAIN"
           security find-identity -v -p codesigning "$KEYCHAIN"
+          echo "::endgroup::"
           echo "CSC_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
 
       - name: Apply local packaging patches (reverted after build)
