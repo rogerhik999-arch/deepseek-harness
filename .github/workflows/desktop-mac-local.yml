@@ -61,7 +61,9 @@ jobs:
           KEYCHAIN="$RUNNER_TEMP/dsh-signing.keychain-db"
           security create-keychain -p ci-keychain-pass "$KEYCHAIN"
           security unlock-keychain -p ci-keychain-pass "$KEYCHAIN"
-          security set-keychain-settings -t 0 "$KEYCHAIN"
+          # Long inactivity timeout; -t 0 would re-lock the keychain instantly and any later
+          # security operation would wait forever on the headless unlock prompt.
+          security set-keychain-settings -t 86400 "$KEYCHAIN"
           security import "$RUNNER_TEMP/dsh-signing/signing.p12" -k "$KEYCHAIN" -P ci-signing -T /usr/bin/codesign
 
       - name: Grant non-interactive keychain access
@@ -102,6 +104,7 @@ jobs:
       - name: Build and package (official chain)
         run: |
           set -euo pipefail
+          security unlock-keychain -p ci-keychain-pass "$RUNNER_TEMP/dsh-signing.keychain-db" || true
           P="$GITHUB_WORKSPACE/apps/desktop/.desktop-build/targets/mac-arm64"
           pnpm run build:official
           pnpm run release:pack --family dsh --out "$P/packed/dsh"
