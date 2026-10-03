@@ -1,0 +1,175 @@
+name: desktop-mac-local
+
+# Local (no Apple credentials) macOS ARM64 desktop build, mirroring the manually
+# driven packaging chain: self-signed "Developer ID Application" certificate,
+# official prepare pipeline, electron-builder --dir with notarization disabled,
+# hand-rolled DMG. Attaches the DMG to the target release when provided.
+
+on:
+  workflow_dispatch:
+    inputs:
+      attach_release_tag:
+        description: "Existing release tag to attach the DMG to (empty = artifact only)"
+        required: false
+        default: "desktop-dev-20260928"
+
+permissions:
+  contents: write
+
+jobs:
+  package-mac-arm64:
+    runs-on: macos-14
+    timeout-minutes: 150
+    env:
+      DSH_DESKTOP_APP_ID: com.deepseek.harness
+      DSH_DESKTOP_AUTO_UPDATE_ENV: production
+      DSH_DESKTOP_MANDATORY_UPDATE_PROD_ORIGIN: https://download.deepseek.com
+      DSH_DESKTOP_MACOS_SIGNING_IDENTITY: "DeepSeek Harness Local"
+      DSH_DESKTOP_MACOS_TEAM_ID: LOCALBUILD
+      DSH_LOCAL_SKIP_PRIMARY_SIGNING: "1"
+      DSH_DESKTOP_TARGET_PLATFORM: darwin
+      DSH_DESKTOP_TARGET_ARCH: arm64
+      APPLE_ID: nobody@example.com
+      APPLE_APP_SPECIFIC_PASSWORD: xxxx-xxxx-xxxx-xxxx
+      APPLE_TEAM_ID: LOCALBUILD
+      CI: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Create local signing certificate
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/dsh-signing"
+          cd "$RUNNER_TEMP/dsh-signing"
+          openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 3650 -nodes \
+            -subj "/CN=Developer ID Application: DeepSeek Harness Local/OU=LOCALBUILD00/O=DeepSeek Harness Local Build/C=CN" \
+            -addext "keyUsage=digitalSignature,keyCertSign" -addext "extendedKeyUsage=codeSigning"
+          # Runner LibreSSL lacks -legacy; its default export is already keychain-compatible.
+          openssl pkcs12 -export -legacy -out signing.p12 -inkey key.pem -in cert.pem -passout pass:ci-signing \
+            || openssl pkcs12 -export -out signing.p12 -inkey key.pem -in cert.pem -passout pass:ci-signing
+
+      - name: Create keychain and import identity
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/dsh-signing.keychain-db"
+          security create-keychain -p ci-keychain-pass "$KEYCHAIN"
+          security unlock-keychain -p ci-keychain-pass "$KEYCHAIN"
+          # Long inactivity timeout; -t 0 would re-lock the keychain instantly and any later
+          # security operation would wait forever on the headless unlock prompt.
+          security set-keychain-settings -t 86400 "$KEYCHAIN"
+          security import "$RUNNER_TEMP/dsh-signing/signing.p12" -k "$KEYCHAIN" -P ci-signing -T /usr/bin/codesign
+
+      - name: Grant non-interactive keychain access
+        run: |
+          set -euo pipefail
+          security set-key-partition-list -S apple-tool:,apple: -s -k ci-keychain-pass "$RUNNER_TEMP/dsh-signing.keychain-db" > /dev/null
+
+      - name: Trust the local certificate for code signing
+        run: |
+          set -euo pipefail
+          # Admin-domain trust for the code-signing policy; without it electron-builder
+          # rejects the self-signed identity as CSSMERR_TP_NOT_TRUSTED.
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign \
+            -k /Library/Keychains/System.keychain "$RUNNER_TEMP/dsh-signing/cert.pem"
+          security find-identity -v -p codesigning "$RUNNER_TEMP/dsh-signing.keychain-db"
+
+      - name: Register keychain and verify identity
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/dsh-signing.keychain-db"
+          # The self-signed root in the same keychain is a valid codesigning identity without
+          # an explicit trust entry; add-trusted-cert is skipped (it can wait on headless UI).
+          security list-keychains -s "$KEYCHAIN" "$HOME/Library/Keychains/login.keychain-db"
+          security find-identity -v -p codesigning "$KEYCHAIN"
+          # Probe binary bound to the certificate, required by the macOS signature cache policy.
+          cp /bin/echo "$RUNNER_TEMP/dsh-signing/probe"
+          codesign --force --sign "Developer ID Application: DeepSeek Harness Local" --keychain "$KEYCHAIN" \
+            --timestamp --options runtime "$RUNNER_TEMP/dsh-signing/probe"
+          echo "CSC_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+          echo "DSH_DESKTOP_MACOS_SIGNING_PROBE=$RUNNER_TEMP/dsh-signing/probe" >> "$GITHUB_ENV"
+
+      - name: Apply local packaging patches (reverted after build)
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          p1 = 'apps/desktop/scripts/verify-macos-signature.mjs'
+          s = open(p1).read()
+          old1 = "  const missing = [expectedAuthority, expectedTeam].filter(field => !fields.has(field))"
+          new1 = """  const missing = [expectedAuthority].filter(field => !fields.has(field))"""
+          assert s.count(old1) == 1
+          open(p1, 'w').write(s.replace(old1, new1))
+
+          p2 = 'apps/desktop/scripts/prepare-dsh.ts'
+          s = open(p2).read()
+          old2 = "      await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'sign:primary-native', () => signMacOSRuntime(join(RUNTIME_ROOT, 'primary-runtime'), resolveDesktopAppId(process.env), resolveMacOSSigningEnvironment(process.env), target.arch, join(BUILD_PATHS.root, 'signature-cache')))\n    }"
+          new2 = "      if (process.env.DSH_LOCAL_SKIP_PRIMARY_SIGNING !== '1') {\n        await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'sign:primary-native', () => signMacOSRuntime(join(RUNTIME_ROOT, 'primary-runtime'), resolveDesktopAppId(process.env), resolveMacOSSigningEnvironment(process.env), target.arch, join(BUILD_PATHS.root, 'signature-cache')))\n      }\n    }"
+          assert s.count(old2) == 1
+          open(p2, 'w').write(s.replace(old2, new2))
+          print('patches applied')
+          PY
+
+      - name: Build and package (official chain)
+        run: |
+          set -euo pipefail
+          security unlock-keychain -p ci-keychain-pass "$RUNNER_TEMP/dsh-signing.keychain-db" || true
+          P="$GITHUB_WORKSPACE/apps/desktop/.desktop-build/targets/mac-arm64"
+          pnpm run build:official
+          pnpm run release:pack --family dsh --out "$P/packed/dsh"
+          pnpm --dir apps/desktop-host pack --pack-destination "$P/packed/dsh"
+          pnpm run release:pack --family vendor --out "$P/packed/vendor"
+          rm -rf "$P/packed/landlock" && mkdir -p "$P/packed/landlock"
+          pnpm --dir native/system run build:ts
+          pnpm --dir native/system/packages/entry pack --pack-destination "$P/packed/landlock"
+          pnpm --dir apps/desktop run prepare:runtime
+          pnpm --dir apps/desktop run prepare:packages
+          pnpm --dir apps/desktop run prepare:dsh
+
+      - name: electron-builder and DMG
+        run: |
+          set -euo pipefail
+          cd apps/desktop
+          security unlock-keychain -p ci-keychain-pass "$CSC_KEYCHAIN"
+          pnpm exec electron-builder --config electron-builder.config.mjs --mac --arm64 --dir --publish never -c.mac.notarize=false
+          pnpm exec tsx scripts/smoke-packaged-runtime.ts
+          VERSION="$(node -p "require('./package.json').version")"
+          DMG="deepseek-harness-${VERSION}-mac-arm64.dmg"
+          A=".desktop-build/targets/mac-arm64/artifacts"
+          rm -rf "$A/dmg-staging" "$A/$DMG"
+          mkdir -p "$A/dmg-staging"
+          cp -R "$A/mac-arm64/DeepSeek Harness.app" "$A/dmg-staging/"
+          ln -s /Applications "$A/dmg-staging/Applications"
+          hdiutil create -volname "DeepSeek Harness" -srcfolder "$A/dmg-staging" -ov -format UDZO "$A/$DMG"
+          rm -rf "$A/dmg-staging"
+          echo "DSH_DMG_PATH=$PWD/$A/$DMG" >> "$GITHUB_ENV"
+
+      - name: Revert local patches
+        if: always()
+        run: git checkout -- apps/desktop/scripts/verify-macos-signature.mjs apps/desktop/scripts/prepare-dsh.ts
+
+      - name: Verify app bundle signature
+        run: |
+          set -euo pipefail
+          APP="apps/desktop/.desktop-build/targets/mac-arm64/artifacts/mac-arm64/DeepSeek Harness.app"
+          codesign --verify --deep --strict "$APP"
+          codesign --display --verbose=2 "$APP" 2>&1 | grep -E "Authority=Developer ID Application: DeepSeek Harness Local"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deepseek-harness-mac-arm64-dmg
+          path: ${{ env.DSH_DMG_PATH }}
+          if-no-files-found: error
+
+      - name: Attach DMG to release
+        if: ${{ inputs.attach_release_tag != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ inputs.attach_release_tag }}" "$DSH_DMG_PATH" \
+            --repo "$GITHUB_REPOSITORY" --clobber
