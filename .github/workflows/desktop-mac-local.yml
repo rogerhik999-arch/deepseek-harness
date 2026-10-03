@@ -138,14 +138,16 @@ jobs:
           security unlock-keychain -p ci-keychain-pass "$CSC_KEYCHAIN"
           pnpm exec electron-builder --config electron-builder.config.mjs --mac --arm64 --dir --publish never -c.mac.notarize=false
           pnpm exec tsx scripts/smoke-packaged-runtime.ts
+          VERSION="$(node -p "require('./package.json').version")"
+          DMG="deepseek-harness-${VERSION}-mac-arm64.dmg"
           A=".desktop-build/targets/mac-arm64/artifacts"
-          rm -rf "$A/dmg-staging" "$A/deepseek-harness-0.1.7-rc.2-mac-arm64.dmg"
+          rm -rf "$A/dmg-staging" "$A/$DMG"
           mkdir -p "$A/dmg-staging"
           cp -R "$A/mac-arm64/DeepSeek Harness.app" "$A/dmg-staging/"
           ln -s /Applications "$A/dmg-staging/Applications"
-          hdiutil create -volname "DeepSeek Harness" -srcfolder "$A/dmg-staging" -ov -format UDZO \
-            "$A/deepseek-harness-0.1.7-rc.2-mac-arm64.dmg"
+          hdiutil create -volname "DeepSeek Harness" -srcfolder "$A/dmg-staging" -ov -format UDZO "$A/$DMG"
           rm -rf "$A/dmg-staging"
+          echo "DSH_DMG_PATH=$PWD/$A/$DMG" >> "$GITHUB_ENV"
 
       - name: Revert local patches
         if: always()
@@ -161,7 +163,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: deepseek-harness-mac-arm64-dmg
-          path: apps/desktop/.desktop-build/targets/mac-arm64/artifacts/deepseek-harness-0.1.7-rc.2-mac-arm64.dmg
+          path: ${{ env.DSH_DMG_PATH }}
           if-no-files-found: error
 
       - name: Attach DMG to release
@@ -169,6 +171,5 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "${{ inputs.attach_release_tag }}" \
-            "apps/desktop/.desktop-build/targets/mac-arm64/artifacts/deepseek-harness-0.1.7-rc.2-mac-arm64.dmg" \
+          gh release upload "${{ inputs.attach_release_tag }}" "$DSH_DMG_PATH" \
             --repo "$GITHUB_REPOSITORY" --clobber
