@@ -986,9 +986,12 @@ async function main(): Promise<void> {
     tray?.relabel()
   }
   refreshApplicationMenu()
-  const trayIconPath = development ? join(app.getAppPath(), 'resources', 'tray-windows.ico') : join(process.resourcesPath, 'tray.ico')
-  if (process.platform === 'win32') {
-    // The tray is the way back to a hidden window; without it, relaunching the application still focuses it.
+  const trayIconPath = process.platform === 'win32'
+    ? development ? join(app.getAppPath(), 'resources', 'tray-windows.ico') : join(process.resourcesPath, 'tray.ico')
+    : development ? join(app.getAppPath(), 'resources', 'icons', '32x32.png') : join(process.resourcesPath, 'tray.png')
+  if (process.platform === 'win32' || process.platform === 'linux') {
+    // The tray is the way back to a hidden window on Windows and Linux; without it, relaunching the
+    // application still focuses it. GNOME delivers the context menu rather than the click event.
     try {
       tray = new DesktopTray({ iconPath: trayIconPath, locale: currentDesktopLocale,
         open: () => { focusPrimaryWindow() }, quit: () => { app.quit() } })

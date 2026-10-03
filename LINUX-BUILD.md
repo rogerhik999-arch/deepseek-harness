@@ -90,6 +90,10 @@ sudo chmod 4755 "$ELECTRON_DIST/chrome-sandbox"
 
 切勿删除 `session.lock` 文件：POSIX 锁以 inode 为准，删除活动会话的锁文件会让互斥彻底失效，两个进程同时写会损坏会话日志。
 
+## 系统托盘（驻留图标）
+
+本分支为 Linux 启用了与 Windows 一致的常驻托盘图标（StatusNotifierItem，实现见 `apps/desktop/src/tray.ts`）：右键菜单提供"打开 DeepSeek Harness"与"退出 DeepSeek Harness"，隐藏窗口后经托盘找回。GNOME 经 Ubuntu 预装的 AppIndicator 扩展显示托盘，且只下发右键菜单——普通单击是否唤回窗口取决于桌面环境（KDE 等支持）。托盘图标为 32 像素的 `resources/icons/32x32.png`，打包为应用内 `resources/tray.png`。
+
 ## 遗留配置的一次性导入
 
 `~/.dsh/settings.yaml` 的历史配置在某个 Host 首次启动时被改名为 `settings.yaml.imported`，各段落（模型服务商定义 `llm-pi-ai`、默认模型路由 `agent-default-model`、UI 偏好）被导入**当时活动的 profile**，之后创建的 profile 不会自动获得这份导入。API key 的值存放在 home 级 `~/.dsh/.credentials.yaml`（按 env 名引用），天然跨 profile 共享，不随导入复制。
