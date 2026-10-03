@@ -233,7 +233,9 @@ export function createElectronBuilderConfig(
       target: ['nsis'],
     },
     linux: {
-      icon: fileURLToPath(new URL('../resources/icon.png', import.meta.url)),
+      // A directory of size-named PNGs: electron-builder installs every size into
+      // /usr/share/icons/hicolor/<size>/apps, which icon themes look up reliably.
+      icon: fileURLToPath(new URL('../resources/icons', import.meta.url)),
       category: 'Development',
       executableName: 'deepseek-harness',
       syncDesktopName: true,

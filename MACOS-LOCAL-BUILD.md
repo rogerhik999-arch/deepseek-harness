@@ -1,6 +1,6 @@
 # macOS ARM64 本地构建与运行笔记
 
-> 本文档记录在本机（Apple Silicon，macOS，Node 24 / pnpm 11）从源码构建、运行 DeepSeek Harness 桌面客户端并配置双 Git 远程的完整经验，基于 `dsh 0.1.7-rc.2`（commit `477b4f4`）。上游可能有破坏性变更，升级后请复核本文命令是否仍然适用。
+> 本文档记录在本机（Apple Silicon，macOS，Node 24 / pnpm 11）从源码构建、运行 DeepSeek Harness 桌面客户端并配置双 Git 远程的完整经验，最初基于 `dsh 0.1.7-rc.2`（commit `477b4f4`）；自 2026-10-04 起日常发布走第 9 节的 GitHub Actions 线上构建（当前基线 `dsh 0.2.1-alpha.1`）。上游可能有破坏性变更，升级后请复核本文命令是否仍然适用。
 
 ## 0. 环境前提
 
@@ -127,11 +127,31 @@ git push -u origin master && git push origin --tags
 - 目标仓库不存在时用 API 创建：`POST /user/repos`（本仓库建为 **private**，改公开：GitHub Settings → General → Danger Zone → Change visibility）；
 - 日常：`git pull upstream master` 同步官方，`git push` 推回自己仓库；本地 master 跟踪 `origin/master`，会领先上游若干本地文档提交，属预期。
 
-## 8. 官方打包路径（未走）
+## 8. 官方签名打包路径（需要 Apple 开发者凭据，本机未走）
+
+> 2026-10-04 起本节的「本地无证书路线」已被第 10 节的 CI 线上构建取代；本节保留用于拿到真实 Apple 证书后的正式打包。
 
 发布级签名打包 `CI=true pnpm run package:mac:arm64` 需要准备 `apps/desktop/.env.macos`（复制 `.env.macos.example`），其中要求真实的 Developer ID Application 证书（`CSC_LINK` p12）、Team ID 与 Apple 公证凭据；连 `--prepare-only` 也会校验这些项。本机无 Apple 开发者凭据，故日常使用开发版客户端（功能等价，差异是无签名、版本号一致、数据目录规则见第 5 节）。
 
-## 9. 故障速查
+
+## 9. CI 线上构建与发布（2026-10-04 起，当前采用）
+
+仓库为公开仓库，GitHub 的 `macos-14`（Apple Silicon）runner 免费且不限时长。`.github/workflows/desktop-mac-local.yml` 用 `workflow_dispatch` 触发（Actions 页面 → desktop-mac-local → Run workflow），输入 `attach_release_tag` 指定要附加 DMG 的 Release 标签；构建完成后用 `gh release upload --clobber` 覆盖同名资产。全流程约 25 分钟，产出约 434MB 的 DMG（本机 hdiutil 同方法约 459MB，属压缩差异）。与 Windows 本机构建 + 手动上传、Linux 的 `desktop-linux-*` 标签触发 workflow 三者并存。
+
+workflow 流程 = 第 8 节本地链的 CI 版：runner 上现场生成自签证书（CN 必须照抄 `Developer ID Application: …` 前缀）+ 专用钥匙串 → 官方构建链（`build:official` → tarball → `prepare:runtime/packages/dsh`）→ electron-builder `--dir` 免公证 → `hdiutil` 制作 DMG → `codesign --verify --deep --strict` 校验 → 附加到 Release。两处本地补丁（Authority 断言放宽、跳过主运行时重签）在 workflow 内以补丁步骤形式应用，构建后 `git checkout --` 还原。
+
+CI 环境独有的四个坑（本机不出现，排障时先查这里）：
+
+1. **runner 的 LibreSSL 不支持 `openssl pkcs12 -legacy`**，导出 p12 需要降级分支（LibreSSL 默认导出本就是钥匙串兼容格式）；
+2. **`security set-keychain-settings -t 0` 会让钥匙串立即自动上锁**，此后任何无头 `security import`/codesign 操作都会永久等待解锁 UI（表现为步骤挂起数十分钟）——用 `-t 86400` 并在 unlock 之后设置。本机当时这条命令恰好被系统拒绝未生效，所以本地从未暴露此问题；
+3. **electron-builder 要求证书在信任库中有效**，否则报 `CSSMERR_TP_NOT_TRUSTED`（0 valid identities）——需要 `sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain`（admin 域，无头安全、秒过）；
+4. **签名缓存探针**：`prepare:dsh` 的原生签名依赖 `DSH_DESKTOP_MACOS_SIGNING_PROBE` 指向一个用当前证书签过的 Mach-O 探针文件（CI 里签一份 `/bin/echo` 即可），漏设会以空路径调用 codesign 报「verification failed」。
+
+观测技巧：Actions 任务进行中时日志 API 返回 BlobNotFound 拿不到，把可疑步骤按命令拆成多个微步骤，用 jobs API 的 step 状态实时定位卡点。
+
+发布约定沿用 `desktop-dev-YYYYMMDD`（亚洲/上海日期）：先建标签与 Release，再触发 workflow 附挂 DMG；同一 Release 内资产可被 `--clobber` 原子替换。
+
+## 10. 故障速查
 
 | 症状 | 原因 | 处理 |
 |---|---|---|
