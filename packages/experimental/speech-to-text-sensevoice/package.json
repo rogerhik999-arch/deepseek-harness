@@ -48,6 +48,6 @@
     "@deepseek-ai/dsh-experimental-speech-to-text": "workspace:*",
     "@deepseek-ai/dsh-subprocess": "workspace:*",
     "@deepseek-ai/dsh-subprocess-local": "workspace:*",
-    "tsx": "^4.22.4"
+    "tsx": "^4.23.12"
   }
 }
