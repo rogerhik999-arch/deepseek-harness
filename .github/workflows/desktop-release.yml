@@ -35,7 +35,7 @@ jobs:
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - id: tag
         run: |
@@ -104,7 +104,7 @@ jobs:
       APPLE_TEAM_ID: LOCALBUILD
       CI: "true"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: pnpm/action-setup@v4
 
@@ -250,7 +250,7 @@ jobs:
     env:
       CI: "true"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: pnpm/action-setup@v4
 
@@ -311,7 +311,7 @@ jobs:
       ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
       CI: "true"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The checkout, pnpm store, runtimes and artifacts need more than the
       # preinstalled toolkits leave free on the runner.
