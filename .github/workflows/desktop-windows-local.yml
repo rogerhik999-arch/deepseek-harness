@@ -1,0 +1,79 @@
+name: desktop-windows-local
+
+# Unsigned Windows x64 desktop build on a GitHub runner, mirroring the
+# manual `package:win:x64:unsigned` flow: benign release environment written
+# to apps/desktop/.env.windows, official packaging chain, NSIS installer with
+# the `-unsigned` suffix, no hardware-token signing. Attaches the installer
+# (and its blockmap) to the target release.
+
+on:
+  workflow_dispatch:
+    inputs:
+      attach_release_tag:
+        description: "Existing release tag to attach the installer to (empty = artifact only)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-windows-local-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package-win-x64:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      CI: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Write the Windows packaging environment
+        shell: pwsh
+        run: |
+          @'
+          DSH_DESKTOP_APP_ID=com.deepseek.harness
+          DSH_DESKTOP_AUTO_UPDATE_ENV=production
+          DSH_DESKTOP_MANDATORY_UPDATE_PROD_ORIGIN=https://download.deepseek.com
+          '@ | Out-File -Encoding utf8NoBOM apps/desktop/.env.windows
+
+      - name: Package the win-x64 unsigned release
+        shell: pwsh
+        run: pnpm run package:desktop:win:x64:unsigned
+
+      - name: Collect installer artifacts
+        shell: pwsh
+        run: |
+          $dir = "apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts"
+          Get-ChildItem $dir -File | Select-Object Name, Length
+          $exe = Get-ChildItem $dir -Filter *.exe | Select-Object -First 1
+          if (-not $exe) { throw "no installer exe produced" }
+          "DSH_WIN_EXE=$($exe.FullName)" | Out-File -Encoding utf8 $env:GITHUB_ENV
+          $blockmap = Get-ChildItem $dir -Filter *.blockmap | Select-Object -First 1
+          if ($blockmap) { "DSH_WIN_BLOCKMAP=$($blockmap.FullName)" | Out-File -Encoding utf8 $env:GITHUB_ENV }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deepseek-harness-win-x64-unsigned
+          path: apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/*
+          if-no-files-found: error
+
+      - name: Attach installer to release
+        if: ${{ inputs.attach_release_tag != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $files = @($env:DSH_WIN_EXE)
+          if ($env:DSH_WIN_BLOCKMAP) { $files += $env:DSH_WIN_BLOCKMAP }
+          gh release upload "${{ inputs.attach_release_tag }}" $files `
+            --repo "$env:GITHUB_REPOSITORY" --clobber
