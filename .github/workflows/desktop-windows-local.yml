@@ -57,14 +57,17 @@ jobs:
           Get-ChildItem $dir -File | Select-Object Name, Length
           $exe = Get-ChildItem $dir -Filter *.exe | Select-Object -First 1
           if (-not $exe) { throw "no installer exe produced" }
-          "DSH_WIN_EXE=$($exe.FullName)" | Out-File -Encoding utf8 $env:GITHUB_ENV
+          # Out-File truncates: every GITHUB_ENV write after the first must -Append.
+          "DSH_WIN_EXE=$($exe.FullName)" | Out-File -Encoding utf8NoBOM $env:GITHUB_ENV
           $blockmap = Get-ChildItem $dir -Filter *.blockmap | Select-Object -First 1
-          if ($blockmap) { "DSH_WIN_BLOCKMAP=$($blockmap.FullName)" | Out-File -Encoding utf8 $env:GITHUB_ENV }
+          if ($blockmap) { "DSH_WIN_BLOCKMAP=$($blockmap.FullName)" | Out-File -Encoding utf8NoBOM -Append $env:GITHUB_ENV }
 
       - uses: actions/upload-artifact@v4
         with:
           name: deepseek-harness-win-x64-unsigned
-          path: apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/*
+          path: |
+            apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/*.exe
+            apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/*.blockmap
           if-no-files-found: error
 
       - name: Attach installer to release
