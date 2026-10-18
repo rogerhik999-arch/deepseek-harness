@@ -239,8 +239,34 @@ jobs:
       - name: Attach DMG to release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.release.outputs.tag }}
-        run: gh release upload "$TAG" "$DSH_DMG_PATH" --repo "$GITHUB_REPOSITORY" --clobber
+          RELEASE_TAG: ${{ needs.release.outputs.tag }}
+          FILE: ${{ env.DSH_DMG_PATH }}
+        run: |
+          set -euo pipefail
+          for i in 1 2 3 4 5; do
+            REL=$(curl -sS --max-time 30 -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+              | python3 -c 'import json,sys;print(json.load(sys.stdin)["id"])') && [ -n "$REL" ] && break
+            echo "release lookup attempt $i failed"; sleep 15
+          done
+          [ -n "${REL:-}" ] || { echo "release lookup failed"; exit 1; }
+          NAME=$(basename "$FILE")
+          AID=$(curl -sS --max-time 30 -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/$REL/assets?per_page=100" \
+            | python3 -c "import json,sys;print(next((a['id'] for a in json.load(sys.stdin) if a['name']=='$NAME'),''))")
+          if [ -n "$AID" ]; then
+            echo "replacing existing asset $NAME"
+            curl -sS --max-time 30 -X DELETE -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/assets/$AID"
+          fi
+          for i in 1 2 3; do
+            curl -sS --max-time 900 -X POST -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Content-Type: application/octet-stream" --data-binary "@$FILE" \
+              "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$REL/assets?name=$NAME" \
+              | python3 -c "import json,sys;a=json.load(sys.stdin);print('uploaded:',a.get('name'),a.get('state'))" && exit 0
+            echo "upload attempt $i failed"; sleep 15
+          done
+          exit 1
 
   win-x64:
     name: Build Windows (win-x64)
@@ -295,12 +321,35 @@ jobs:
       - name: Attach installer to release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.release.outputs.tag }}
+          RELEASE_TAG: ${{ needs.release.outputs.tag }}
         shell: pwsh
         run: |
+          $H = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = "application/vnd.github+json" }
+          $rel = $null
+          for ($i = 0; $i -lt 5; $i++) {
+            try {
+              $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/tags/$env:RELEASE_TAG" -Headers $H -TimeoutSec 30
+              break
+            } catch { Write-Host "release lookup attempt $i failed: $_"; Start-Sleep 15 }
+          }
+          if (-not $rel) { throw "release lookup failed" }
           $files = @($env:DSH_WIN_EXE)
           if ($env:DSH_WIN_BLOCKMAP) { $files += $env:DSH_WIN_BLOCKMAP }
-          gh release upload "$TAG" $files --repo "$env:GITHUB_REPOSITORY" --clobber
+          foreach ($f in $files) {
+            $name = Split-Path $f -Leaf
+            $existing = $rel.assets | Where-Object { $_.name -eq $name }
+            if ($existing) {
+              Write-Host "replacing existing asset $name"
+              Invoke-RestMethod -Method Delete -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/assets/$($existing.id)" -Headers $H | Out-Null
+            }
+            for ($i = 0; $i -lt 3; $i++) {
+              try {
+                Invoke-RestMethod -Method Post -Uri "https://uploads.github.com/repos/$env:GITHUB_REPOSITORY/releases/$($rel.id)/assets?name=$name" -Headers $H -InFile $f -ContentType "application/octet-stream" | Out-Null
+                Write-Host "uploaded: $name"
+                break
+              } catch { Write-Host "upload attempt $i for $name failed: $_"; Start-Sleep 15 }
+            }
+          }
 
   linux-x64:
     name: Build Linux (linux-x64)
@@ -351,9 +400,32 @@ jobs:
       - name: Attach packages to release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.release.outputs.tag }}
+          RELEASE_TAG: ${{ needs.release.outputs.tag }}
         run: |
-          gh release upload "$TAG" \
-            apps/desktop/.desktop-build/targets/linux-x64/artifacts/*.deb \
-            apps/desktop/.desktop-build/targets/linux-x64/artifacts/*.AppImage \
-            --repo "$GITHUB_REPOSITORY" --clobber
+          set -euo pipefail
+          for i in 1 2 3 4 5; do
+            REL=$(curl -sS --max-time 30 -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+              | python3 -c 'import json,sys;print(json.load(sys.stdin)["id"])') && [ -n "$REL" ] && break
+            echo "release lookup attempt $i failed"; sleep 15
+          done
+          [ -n "${REL:-}" ] || { echo "release lookup failed"; exit 1; }
+          for FILE in apps/desktop/.desktop-build/targets/linux-x64/artifacts/*.deb \
+                      apps/desktop/.desktop-build/targets/linux-x64/artifacts/*.AppImage; do
+            NAME=$(basename "$FILE")
+            AID=$(curl -sS --max-time 30 -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/$REL/assets?per_page=100" \
+              | python3 -c "import json,sys;print(next((a['id'] for a in json.load(sys.stdin) if a['name']=='$NAME'),''))")
+            if [ -n "$AID" ]; then
+              echo "replacing existing asset $NAME"
+              curl -sS --max-time 30 -X DELETE -H "Authorization: Bearer $GH_TOKEN" \
+                "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/assets/$AID"
+            fi
+            for i in 1 2 3; do
+              curl -sS --max-time 900 -X POST -H "Authorization: Bearer $GH_TOKEN" \
+                -H "Content-Type: application/octet-stream" --data-binary "@$FILE" \
+                "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$REL/assets?name=$NAME" \
+                | python3 -c "import json,sys;a=json.load(sys.stdin);print('uploaded:',a.get('name'),a.get('state'))" && break
+              echo "upload attempt $i for $NAME failed"; sleep 15
+            done
+          done
