@@ -1,23 +1,93 @@
-name: desktop-mac-local
+name: desktop-release
 
-# Local (no Apple credentials) macOS ARM64 desktop build, mirroring the manually
-# driven packaging chain: self-signed "Developer ID Application" certificate,
-# official prepare pipeline, electron-builder --dir with notarization disabled,
-# hand-rolled DMG. Attaches the DMG to the target release when provided.
+# Unified three-platform desktop release. One dispatch (or a pushed desktop-*
+# tag) builds mac-arm64, win-x64 and linux-x64 in parallel on hosted runners
+# and attaches every artifact to ONE release page:
+#   - release_tag input when given,
+#   - else the pushed tag (desktop-* tags),
+#   - else desktop-dev-YYYYMMDD (Asia/Shanghai), created on the fly.
+# macOS uses the local self-signed "Developer ID Application" certificate;
+# Windows uses the official unsigned mode; Linux packages deb + AppImage.
 
 on:
   workflow_dispatch:
     inputs:
-      attach_release_tag:
-        description: "Existing release tag to attach the DMG to (empty = artifact only)"
+      release_tag:
+        description: "Release tag to publish under (empty = desktop-dev-YYYYMMDD today)"
         required: false
-        default: "desktop-dev-20260928"
+        default: ""
+  push:
+    tags:
+      - "desktop-*"
 
 permissions:
   contents: write
 
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  package-mac-arm64:
+  release:
+    name: Prepare the release page
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: tag
+        run: |
+          if [ -n "${{ inputs.release_tag }}" ]; then
+            TAG="${{ inputs.release_tag }}"
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            TAG="${GITHUB_REF_NAME}"
+          else
+            TAG="desktop-dev-$(TZ=Asia/Shanghai date +%Y%m%d)"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "release tag: $TAG"
+
+      - name: Create the release when missing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "release $TAG already exists; attaching to it"
+            exit 0
+          fi
+          VERSION=$(node -p "require('./apps/desktop/package.json').version")
+          cat > release-notes.md <<NOTES
+          本地签名开发版桌面客户端（无 Apple 官方凭据，自签证书签名，未公证；Windows 为官方免签名模式；Linux 附带 SUID 沙箱配置脚本）。
+
+          ## macOS (mac-arm64)
+
+          - \`deepseek-harness-${VERSION}-mac-arm64.dmg\` — 自包含安装包，拖入 Applications 即可。首次打开需右键 → 打开（或 \`xattr -cr "/Applications/DeepSeek Harness.app"\`）。
+
+          ## Windows (win-x64)
+
+          - \`deepseek-harness-${VERSION}-win-x64-unsigned.exe\` — NSIS 安装器（官方 unsigned 模式，未做代码签名）。SmartScreen 可能提示，选择「仍要运行」即可。
+
+          ## Linux / Ubuntu (linux-x64)
+
+          - \`deepseek-harness-${VERSION}-linux-amd64.deb\`（推荐，Ubuntu 22.04+ / Debian）——\`sudo dpkg -i\` 安装，脚本自动配置 SUID 沙箱与 AppArmor profile。
+          - \`deepseek-harness-${VERSION}-linux-x86_64.AppImage\` — 需要目标机安装 libfuse2。
+
+          ## 说明
+
+          - 基线：dsh \`${VERSION}\`，构建 commit ${GITHUB_SHA}（GitHub Actions 三平台并行云端构建）。
+          - 安装后读写真实 \`~/.dsh\`（\`%USERPROFILE%\\.dsh\`），与 CLI/Web 共享设置、凭据与会话。
+          - 自动更新源指向官方 download.deepseek.com，跨证书更新会被签名校验拒绝（预期行为）。
+          NOTES
+          gh release create "$TAG" --target "$GITHUB_SHA" --latest \
+            --title "DeepSeek Harness Desktop ($TAG, $VERSION)" \
+            --notes-file release-notes.md
+
+  mac-arm64:
+    name: Build macOS (mac-arm64)
+    needs: release
     runs-on: macos-14
     timeout-minutes: 150
     env:
@@ -167,9 +237,123 @@ jobs:
           if-no-files-found: error
 
       - name: Attach DMG to release
-        if: ${{ inputs.attach_release_tag != '' }}
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release.outputs.tag }}
+        run: gh release upload "$TAG" "$DSH_DMG_PATH" --repo "$GITHUB_REPOSITORY" --clobber
+
+  win-x64:
+    name: Build Windows (win-x64)
+    needs: release
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      CI: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Write the Windows packaging environment
+        shell: pwsh
         run: |
-          gh release upload "${{ inputs.attach_release_tag }}" "$DSH_DMG_PATH" \
+          @'
+          DSH_DESKTOP_APP_ID=com.deepseek.harness
+          DSH_DESKTOP_AUTO_UPDATE_ENV=production
+          DSH_DESKTOP_MANDATORY_UPDATE_PROD_ORIGIN=https://download.deepseek.com
+          '@ | Out-File -Encoding utf8NoBOM apps/desktop/.env.windows
+
+      - name: Package the win-x64 unsigned release
+        shell: pwsh
+        run: pnpm run package:desktop:win:x64:unsigned
+
+      - name: Collect installer artifacts
+        shell: pwsh
+        run: |
+          $dir = "apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts"
+          Get-ChildItem $dir -File | Select-Object Name, Length
+          $exe = Get-ChildItem $dir -Filter *.exe | Select-Object -First 1
+          if (-not $exe) { throw "no installer exe produced" }
+          # Out-File truncates: every GITHUB_ENV write after the first must -Append.
+          "DSH_WIN_EXE=$($exe.FullName)" | Out-File -Encoding utf8NoBOM $env:GITHUB_ENV
+          $blockmap = Get-ChildItem $dir -Filter *.blockmap | Select-Object -First 1
+          if ($blockmap) { "DSH_WIN_BLOCKMAP=$($blockmap.FullName)" | Out-File -Encoding utf8NoBOM -Append $env:GITHUB_ENV }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deepseek-harness-win-x64-unsigned
+          path: |
+            apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/*.exe
+            apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/*.blockmap
+          if-no-files-found: error
+
+      - name: Attach installer to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release.outputs.tag }}
+        shell: pwsh
+        run: |
+          $files = @($env:DSH_WIN_EXE)
+          if ($env:DSH_WIN_BLOCKMAP) { $files += $env:DSH_WIN_BLOCKMAP }
+          gh release upload "$TAG" $files --repo "$env:GITHUB_REPOSITORY" --clobber
+
+  linux-x64:
+    name: Build Linux (linux-x64)
+    needs: release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+      CI: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      # The checkout, pnpm store, runtimes and artifacts need more than the
+      # preinstalled toolkits leave free on the runner.
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghc || true
+          df -h /
+
+      - uses: pnpm/action-setup@v6
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Write the Linux packaging environment
+        run: |
+          cat > apps/desktop/.env.linux <<'EOF'
+          DSH_DESKTOP_APP_ID=com.deepseek.harness
+          DSH_DESKTOP_AUTO_UPDATE_ENV=test
+          EOF
+
+      - name: Package the linux-x64 release
+        env:
+          DSH_DESKTOP_SKIP_PACKAGED_SMOKE: '1'
+        run: pnpm run package:desktop:linux:x64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deepseek-harness-linux-x64
+          path: |
+            apps/desktop/.desktop-build/targets/linux-x64/artifacts/*.deb
+            apps/desktop/.desktop-build/targets/linux-x64/artifacts/*.AppImage
+          if-no-files-found: error
+
+      - name: Attach packages to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          gh release upload "$TAG" \
+            apps/desktop/.desktop-build/targets/linux-x64/artifacts/*.deb \
+            apps/desktop/.desktop-build/targets/linux-x64/artifacts/*.AppImage \
             --repo "$GITHUB_REPOSITORY" --clobber

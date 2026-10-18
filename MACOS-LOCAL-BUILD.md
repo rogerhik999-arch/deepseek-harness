@@ -134,22 +134,27 @@ git push -u origin master && git push origin --tags
 发布级签名打包 `CI=true pnpm run package:mac:arm64` 需要准备 `apps/desktop/.env.macos`（复制 `.env.macos.example`），其中要求真实的 Developer ID Application 证书（`CSC_LINK` p12）、Team ID 与 Apple 公证凭据；连 `--prepare-only` 也会校验这些项。本机无 Apple 开发者凭据，故日常使用开发版客户端（功能等价，差异是无签名、版本号一致、数据目录规则见第 5 节）。
 
 
-## 9. CI 线上构建与发布（2026-10-04 起，当前采用）
+## 9. CI 线上三平台统一发布（2026-10-18 起，当前采用）
 
-仓库为公开仓库，GitHub 的 `macos-14`（Apple Silicon）runner 免费且不限时长。`.github/workflows/desktop-mac-local.yml` 用 `workflow_dispatch` 触发（Actions 页面 → desktop-mac-local → Run workflow），输入 `attach_release_tag` 指定要附加 DMG 的 Release 标签；构建完成后用 `gh release upload --clobber` 覆盖同名资产。全流程约 25 分钟，产出约 434MB 的 DMG（本机 hdiutil 同方法约 459MB，属压缩差异）。与 Windows 本机构建 + 手动上传、Linux 的 `desktop-linux-*` 标签触发 workflow 三者并存。
+仓库为公开仓库，GitHub 托管 runner 免费。`.github/workflows/desktop-release.yml` 是**唯一**的发布入口：一次 `workflow_dispatch`（或推送任意 `desktop-*` 标签）并行构建 **macOS（mac-arm64）+ Windows（win-x64）+ Linux（ubuntu deb/AppImage）**，产物统一附挂到同一个发布页。发布页按优先级取：输入 `release_tag` → 推送的标签名 → 自动创建 `desktop-dev-YYYYMMDD`（亚洲/上海日期，含标签与三平台说明文案）。mac/win 分别约 25/50 分钟，Linux 约 35 分钟，三者并行；单平台失败可在 run 页面 Re-run failed jobs 单独重跑，产物用 `--clobber` 原子覆盖。
 
-workflow 流程 = 第 8 节本地链的 CI 版：runner 上现场生成自签证书（CN 必须照抄 `Developer ID Application: …` 前缀）+ 专用钥匙串 → 官方构建链（`build:official` → tarball → `prepare:runtime/packages/dsh`）→ electron-builder `--dir` 免公证 → `hdiutil` 制作 DMG → `codesign --verify --deep --strict` 校验 → 附加到 Release。两处本地补丁（Authority 断言放宽、跳过主运行时重签）在 workflow 内以补丁步骤形式应用，构建后 `git checkout --` 还原。
+各平台流程（均为已验证链的 CI 版）：mac = 第 8 节本地链 + 自签证书（步骤见下）+ `--clobber` 附挂；win = 写良性 `.env.windows` 后单命令 `pnpm run package:desktop:win:x64:unsigned`（NSIS `-unsigned` 后缀，runner 自带 tar 与 VS C++ 工具链）；linux = 写 `.env.linux` 后 `pnpm run package:desktop:linux:x64`（WASM Office 引擎回退，产物 deb + AppImage）。mac 的两处本地补丁（Authority 断言放宽、跳过主运行时重签）在 workflow 内应用、构建后还原。
 
-CI 环境独有的四个坑（本机不出现，排障时先查这里）：
+macOS 作业在 CI 环境独有的四个坑（本机不出现，排障先查这里）：
 
 1. **runner 的 LibreSSL 不支持 `openssl pkcs12 -legacy`**，导出 p12 需要降级分支（LibreSSL 默认导出本就是钥匙串兼容格式）；
 2. **`security set-keychain-settings -t 0` 会让钥匙串立即自动上锁**，此后任何无头 `security import`/codesign 操作都会永久等待解锁 UI（表现为步骤挂起数十分钟）——用 `-t 86400` 并在 unlock 之后设置。本机当时这条命令恰好被系统拒绝未生效，所以本地从未暴露此问题；
 3. **electron-builder 要求证书在信任库中有效**，否则报 `CSSMERR_TP_NOT_TRUSTED`（0 valid identities）——需要 `sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain`（admin 域，无头安全、秒过）；
 4. **签名缓存探针**：`prepare:dsh` 的原生签名依赖 `DSH_DESKTOP_MACOS_SIGNING_PROBE` 指向一个用当前证书签过的 Mach-O 探针文件（CI 里签一份 `/bin/echo` 即可），漏设会以空路径调用 codesign 报「verification failed」。
 
+Windows 作业的两个坑：
+
+1. **`Out-File $env:GITHUB_ENV` 不带 `-Append` 会整体截断文件**——同一步骤写多个环境变量时只有最后一个生效（曾导致 exe 路径丢失、Release 缺 exe 资产），第二次起必须 `-Append`；
+2. unsigned 产物目录（`unsigned-artifacts`）里有完整解包树，upload-artifact 的 path 要用 `*.exe`/`*.blockmap` 通配，否则会传近万个文件。
+
 观测技巧：Actions 任务进行中时日志 API 返回 BlobNotFound 拿不到，把可疑步骤按命令拆成多个微步骤，用 jobs API 的 step 状态实时定位卡点。
 
-发布约定沿用 `desktop-dev-YYYYMMDD`（亚洲/上海日期）：先建标签与 Release，再触发 workflow 附挂 DMG；同一 Release 内资产可被 `--clobber` 原子替换。
+历史：2026-09-28 起为 mac 单平台 workflow（desktop-mac-local）+ Windows 本机构建手传 + Linux 标签触发（desktop-linux-release）；2026-10-18 合并为本节的统一入口，旧的三个 workflow 文件已删除。
 
 ## 10. 故障速查
 
