@@ -34,6 +34,10 @@ export function desktopReleasesRoot(env: NodeJS.ProcessEnv): string {
  */
 export async function retainDesktopCi(env: NodeJS.ProcessEnv, appRoot = resolve(import.meta.dirname, '..')): Promise<string> {
   const target = resolveDesktopBuildTarget(env)
+  // Fork addition: the sibling linux targets publish through their own flow and never retain here.
+  if (target === 'linux-x64' || target === 'linux-arm64') {
+    throw new Error('desktop retention: linux targets do not retain through the desktop CI path')
+  }
   const windows = target === 'win-x64'
   const platform = windows ? 'win32' : 'darwin'
   const settings = loadDesktopPackageEnvironment(platform, env, appRoot, { unsigned: true })
