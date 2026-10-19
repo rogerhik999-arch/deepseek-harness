@@ -65,6 +65,7 @@ jobs:
           ## macOS (mac-arm64)
 
           - \`deepseek-harness-${VERSION}-mac-arm64.dmg\` — 自包含安装包，拖入 Applications 即可。首次打开需右键 → 打开（或 \`xattr -cr "/Applications/DeepSeek Harness.app"\`）。
+          - **提示「已损坏，无法打开」？** 未公证签名的正常拦截：终端执行 `xattr -cr "/Applications/DeepSeek Harness.app"` 后再打开，或到 系统设置 → 隐私与安全性 点「仍要打开」。下载后请核对同名 `.sha256` 校验文件。
 
           ## Windows (win-x64)
 
@@ -217,6 +218,9 @@ jobs:
           ln -s /Applications "$A/dmg-staging/Applications"
           hdiutil create -volname "DeepSeek Harness" -srcfolder "$A/dmg-staging" -ov -format UDZO "$A/$DMG"
           rm -rf "$A/dmg-staging"
+          shasum -a 256 "$A/$DMG" > "$A/$DMG.sha256"
+          echo "DSH_DMG_PATH=$PWD/$A/$DMG" >> "$GITHUB_ENV"
+          echo "DSH_DMG_SHA=$PWD/$A/$DMG.sha256" >> "$GITHUB_ENV"
           echo "DSH_DMG_PATH=$PWD/$A/$DMG" >> "$GITHUB_ENV"
 
       - name: Revert local patches
@@ -233,7 +237,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: deepseek-harness-mac-arm64-dmg
-          path: ${{ env.DSH_DMG_PATH }}
+          path: |
+            ${{ env.DSH_DMG_PATH }}
+            ${{ env.DSH_DMG_SHA }}
           if-no-files-found: error
 
       - name: Attach DMG to release
@@ -263,9 +269,21 @@ jobs:
             curl -sS --max-time 900 -X POST -H "Authorization: Bearer $GH_TOKEN" \
               -H "Content-Type: application/octet-stream" --data-binary "@$FILE" \
               "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$REL/assets?name=$NAME" \
-              | python3 -c "import json,sys;a=json.load(sys.stdin);print('uploaded:',a.get('name'),a.get('state'))" && exit 0
+              | python3 -c "import json,sys;a=json.load(sys.stdin);print('uploaded:',a.get('name'),a.get('state'))"
             echo "upload attempt $i failed"; sleep 15
           done
+          SHANAME="$NAME.sha256"
+          SHAID=$(curl -sS --max-time 30 -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/$REL/assets?per_page=100" \
+            | python3 -c "import json,sys;print(next((a['id'] for a in json.load(sys.stdin) if a['name']=='$SHANAME'),''))")
+          if [ -n "$SHAID" ]; then
+            curl -sS --max-time 30 -X DELETE -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/assets/$SHAID"
+          fi
+          curl -sS --max-time 60 -X POST -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Content-Type: application/octet-stream" --data-binary "@$DSH_DMG_SHA" \
+            "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$REL/assets?name=$SHANAME" \
+            | python3 -c "import json,sys;a=json.load(sys.stdin);print('uploaded:',a.get('name'),a.get('state'))"
           exit 1
 
   win-x64:
@@ -309,6 +327,9 @@ jobs:
           "DSH_WIN_EXE=$($exe.FullName)" | Out-File -Encoding utf8NoBOM $env:GITHUB_ENV
           $blockmap = Get-ChildItem $dir -Filter *.blockmap | Select-Object -First 1
           if ($blockmap) { "DSH_WIN_BLOCKMAP=$($blockmap.FullName)" | Out-File -Encoding utf8NoBOM -Append $env:GITHUB_ENV }
+          $sum = (Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLower()
+          "$sum  $($exe.Name)" | Out-File -Encoding utf8NoBOM "$dir/deepseek-harness-win-checksums.sha256"
+          "DSH_WIN_SUM=$dir/deepseek-harness-win-checksums.sha256" | Out-File -Encoding utf8NoBOM -Append $env:GITHUB_ENV
 
       - uses: actions/upload-artifact@v4
         with:
@@ -335,6 +356,7 @@ jobs:
           if (-not $rel) { throw "release lookup failed" }
           $files = @($env:DSH_WIN_EXE)
           if ($env:DSH_WIN_BLOCKMAP) { $files += $env:DSH_WIN_BLOCKMAP }
+          if ($env:DSH_WIN_SUM) { $files += $env:DSH_WIN_SUM }
           foreach ($f in $files) {
             $name = Split-Path $f -Leaf
             $existing = $rel.assets | Where-Object { $_.name -eq $name }
@@ -410,6 +432,8 @@ jobs:
             echo "release lookup attempt $i failed"; sleep 15
           done
           [ -n "${REL:-}" ] || { echo "release lookup failed"; exit 1; }
+          SHAFILE=apps/desktop/.desktop-build/targets/linux-x64/artifacts/SHA256SUMS.txt
+          rm -f "$SHAFILE"
           for FILE in apps/desktop/.desktop-build/targets/linux-x64/artifacts/*.deb \
                       apps/desktop/.desktop-build/targets/linux-x64/artifacts/*.AppImage; do
             NAME=$(basename "$FILE")
@@ -428,4 +452,17 @@ jobs:
                 | python3 -c "import json,sys;a=json.load(sys.stdin);print('uploaded:',a.get('name'),a.get('state'))" && break
               echo "upload attempt $i for $NAME failed"; sleep 15
             done
+            (cd "$(dirname "$FILE")" && sha256sum "$(basename "$FILE")" >> "$(basename "$SHAFILE")")
           done
+          NAME=$(basename "$SHAFILE")
+          AID=$(curl -sS --max-time 30 -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/$REL/assets?per_page=100" \
+            | python3 -c "import json,sys;print(next((a['id'] for a in json.load(sys.stdin) if a['name']=='$NAME'),''))")
+          if [ -n "$AID" ]; then
+            curl -sS --max-time 30 -X DELETE -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/assets/$AID"
+          fi
+          curl -sS --max-time 60 -X POST -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Content-Type: application/octet-stream" --data-binary "@$SHAFILE" \
+            "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$REL/assets?name=$NAME" \
+            | python3 -c "import json,sys;a=json.load(sys.stdin);print('uploaded:',a.get('name'),a.get('state'))"
