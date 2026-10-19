@@ -1,6 +1,6 @@
 # macOS ARM64 本地构建与运行笔记
 
-> 本文档记录在本机（Apple Silicon，macOS，Node 24 / pnpm 11）从源码构建、运行 DeepSeek Harness 桌面客户端并配置双 Git 远程的完整经验，最初基于 `dsh 0.1.7-rc.2`（commit `477b4f4`）；自 2026-10-04 起日常发布走第 9 节的 GitHub Actions 线上构建（当前基线 `dsh 0.2.1-alpha.1`）。上游可能有破坏性变更，升级后请复核本文命令是否仍然适用。
+> 本文档记录在本机（Apple Silicon，macOS，Node 24 / pnpm 11）从源码构建、运行 DeepSeek Harness 桌面客户端并配置双 Git 远程的完整经验，最初基于 `dsh 0.1.7-rc.2`（commit `477b4f4`）；自 2026-10-04 起日常发布走第 9 节的 GitHub Actions 线上构建（当前基线 `dsh 0.2.1-rc.2`）。上游可能有破坏性变更，升级后请复核本文命令是否仍然适用。
 
 ## 0. 环境前提
 
