@@ -288,7 +288,6 @@ jobs:
             -H "Content-Type: application/octet-stream" --data-binary "@$DSH_DMG_SHA" \
             "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$REL/assets?name=$SHANAME" \
             | python3 -c "import json,sys;a=json.load(sys.stdin);print('uploaded:',a.get('name'),a.get('state'))"
-          exit 1
 
   win-x64:
     name: Build Windows (win-x64)
