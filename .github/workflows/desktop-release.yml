@@ -266,10 +266,14 @@ jobs:
               "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/assets/$AID"
           fi
           for i in 1 2 3; do
-            curl -sS --max-time 900 -X POST -H "Authorization: Bearer $GH_TOKEN" \
+            if curl -sS --max-time 900 -X POST -H "Authorization: Bearer $GH_TOKEN" \
               -H "Content-Type: application/octet-stream" --data-binary "@$FILE" \
               "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$REL/assets?name=$NAME" \
-              | python3 -c "import json,sys;a=json.load(sys.stdin);print('uploaded:',a.get('name'),a.get('state'))"
+              | python3 -c "import json,sys;a=json.load(sys.stdin);print('uploaded:',a.get('name'),a.get('state'))"; then
+              DMG_UPLOADED=1
+              break
+            fi
+            echo "upload attempt $i failed"; sleep 15
             echo "upload attempt $i failed"; sleep 15
           done
           SHANAME="$NAME.sha256"
