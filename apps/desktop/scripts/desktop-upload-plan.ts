@@ -188,6 +188,10 @@ export async function createDesktopUploadPlan(
   if (target === undefined) {
     throw new Error(`desktop upload: unsupported target ${String(targetName)}`)
   }
+  // Fork addition: the sibling linux target publishes through its own flow and never uploads here.
+  if (targetName === 'linux-x64') {
+    throw new Error(`desktop upload: ${targetName} does not upload through this plan`)
+  }
   const environment = options.environment ?? process.env
   const repositoryRoot = options.repositoryRoot ?? REPOSITORY_ROOT
   const appRoot = options.appRoot ?? APP_ROOT

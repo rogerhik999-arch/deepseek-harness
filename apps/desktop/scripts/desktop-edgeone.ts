@@ -26,6 +26,8 @@ export function resolveDesktopPurgeConfig(
   env: NodeJS.ProcessEnv, target: DesktopPackageTargetName, publicUrl?: string,
 ): DesktopPurgeConfig {
   if (resolveDesktopAutoUpdateEnvironment(env) !== 'production') throw new DesktopPurgeError('desktop purge: production is required')
+  // Fork addition: the sibling linux targets have no latest installer on the EdgeOne channel.
+  if (target === 'linux-x64') throw new DesktopPurgeError('desktop purge: linux targets are not supported')
   const { platform, arch } = desktopTargetPlatform(target)
   const update = resolveDesktopUploadConfig(env, platform, arch)
   const zoneId = requiredEnvironmentValue(env, 'DOWNLOAD_PROD_EO_ZONE_ID')
