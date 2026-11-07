@@ -216,12 +216,18 @@ jobs:
           mkdir -p "$A/dmg-staging"
           cp -R "$A/mac-arm64/DeepSeek Harness.app" "$A/dmg-staging/"
           ln -s /Applications "$A/dmg-staging/Applications"
-          hdiutil create -volname "DeepSeek Harness" -srcfolder "$A/dmg-staging" -ov -format UDZO "$A/$DMG"
+          for i in 1 2 3 4 5; do
+            if hdiutil create -volname "DeepSeek Harness" -srcfolder "$A/dmg-staging" -ov -format UDZO "$A/$DMG"; then
+              break
+            fi
+            echo "hdiutil attempt $i failed (Resource busy is a known transient); cleaning stray disk-image helpers"
+            pkill -f diskimages-helper 2>/dev/null || true
+            sleep 15
+          done
           rm -rf "$A/dmg-staging"
           shasum -a 256 "$A/$DMG" > "$A/$DMG.sha256"
           echo "DSH_DMG_PATH=$PWD/$A/$DMG" >> "$GITHUB_ENV"
           echo "DSH_DMG_SHA=$PWD/$A/$DMG.sha256" >> "$GITHUB_ENV"
-          echo "DSH_DMG_PATH=$PWD/$A/$DMG" >> "$GITHUB_ENV"
 
       - name: Revert local patches
         if: always()
