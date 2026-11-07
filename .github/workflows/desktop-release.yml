@@ -89,7 +89,7 @@ jobs:
   mac-arm64:
     name: Build macOS (mac-arm64)
     needs: release
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 150
     env:
       DSH_DESKTOP_APP_ID: com.deepseek.harness
