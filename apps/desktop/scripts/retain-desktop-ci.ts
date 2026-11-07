@@ -34,6 +34,10 @@ export function desktopReleasesRoot(env: NodeJS.ProcessEnv): string {
  */
 export function resolveDesktopRetentionRunner(env: NodeJS.ProcessEnv): string {
   const target = resolveDesktopBuildTarget(env)
+  // Fork addition: the sibling linux targets publish through their own flow and never retain here.
+  if (target === 'linux-x64' || target === 'linux-arm64') {
+    throw new Error('desktop retention: linux targets do not retain through the desktop CI path')
+  }
   const routes = desktopPublishRunnersSchema.parse(JSON.parse(required(env, 'DESKTOP_PUBLISH_RUNNERS')))
   const route = routes[required(env, 'RUNNER_NAME')]
   if (!route || !route.target.includes(target)
