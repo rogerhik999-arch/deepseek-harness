@@ -1,6 +1,6 @@
 /** Select local test defaults or platform release settings without changing the caller's environment. */
 
-import { accessSync, constants, statSync } from 'node:fs'
+import { accessSync, constants, existsSync, statSync } from 'node:fs'
 import { dirname, isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readDesktopPackageSettings as readSettings } from './desktop-file-settings.mjs'
@@ -75,20 +75,9 @@ export function loadDesktopPackageEnvironment(platform, environment = process.en
   const accepts = name => preset === undefined
     ? SHARED_SETTING.test(name) || platformSetting.test(name)
     : /^(?:DSH_DESKTOP_(?:APP_ID|AUTO_UPDATE_ENV|NPM_REGISTRY|MANDATORY_UPDATE_(?:CONFIG|(?:TEST|PROD)_ORIGIN))|DOWNLOAD_TEST_(?:ORIGIN|RELEASE_ID))$/u.test(name) || publicPlatformSetting.test(name)
+  // Linux packages are local builds: `.env.linux` is optional and every other read error surfaces.
   let settings
-  if (platform === 'linux') {
-    settings = {}
-    try {
-      const parsed = parseEnv(readFileSync(path, 'utf8').replace(/^\uFEFF/u, ''))
-      for (const name of Object.keys(parsed)) {
-        if (!accepts(name)) throw new Error(`desktop package: unsupported setting ${name} in ${path}; use the platform template`)
-        settings[name] = parsed[name]
-      }
-    }
-    catch (error) {
-      if ((error ?? {}).code !== 'ENOENT') throw error
-    }
-  }
+  if (platform === 'linux') settings = existsSync(path) ? readSettings(path, accepts) : {}
   else settings = readSettings(path, accepts)
   if (preset !== undefined) {
     if (settings.DSH_DESKTOP_AUTO_UPDATE_ENV !== preset) throw new Error('desktop package: preset deployment must match its name')
