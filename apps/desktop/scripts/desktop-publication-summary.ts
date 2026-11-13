@@ -27,8 +27,6 @@ function link(url: string, label = url): string { return `<a href="${text(url)}"
 export async function desktopPublicationSummary(
   source: DesktopRetainedSource, plan: DesktopUploadPlan, approval: string, uploadWebsite: boolean,
 ): Promise<string> {
-  // Fork addition: the sibling linux target publishes through its own flow and never reaches here.
-  if (plan.target === 'linux-x64') throw new Error('desktop publication summary: linux targets are not supported')
   const origin = new URL(plan.publicUrl).origin
   const url = (key: string) => `${origin}/${key.split('/').map(encodeURIComponent).join('/')}`
   const files = []
