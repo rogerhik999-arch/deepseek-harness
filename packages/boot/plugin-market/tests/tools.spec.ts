@@ -1,4 +1,5 @@
 /** The read-only market listing tool over the same service the Discover page uses. */
+import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import { executeToolFixture } from '@deepseek-ai/dsh-tool-testkit'
 import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import { Context, Service } from '@deepseek-ai/cordis'
@@ -33,6 +34,7 @@ async function fixture(indexes: readonly string[] = [URL_A]) {
   }
   await ctx.plugin(Manager)
   await ctx.plugin(PluginMarket, { indexes: [...indexes], detailCacheDir: UNUSED_CACHE })
+  await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
   await ctx.plugin(NativeToolExecutor)
@@ -75,6 +77,14 @@ it('lists configured indexes with English titles', async () => {
   vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('offline'))))
   await expect(ctx.pluginMarket.search(URL_A, { sort: { kind: 'index' }, offset: 0, limit: 1, refresh: true })).rejects.toThrow()
   expect((await call({ action: 'list_indexes' })).json).toEqual({ indexes: [{ url: URL_A, title: 'Localized', error: `Could not fetch ${URL_A}: offline` }] })
+})
+
+it('lists usable Git addresses without exposing invalid Git addresses from the profile', async () => {
+  const git = 'git+ssh://git@github.com/team/plugins.git'
+  const invalid = 'git+https://user:secret@github.com/team/plugins.git'
+  const { call, ctx } = await fixture([git, invalid])
+  expect(ctx.pluginMarket.listIndexes().find(source => source.url === invalid)?.error).toBeDefined()
+  expect((await call({ action: 'list_indexes' })).json).toEqual({ indexes: [{ url: git, title: null }] })
 })
 
 it('pages plugins with the default version\'s install target and registry plugin_manager accepts', async () => {
@@ -212,6 +222,7 @@ it('registers the tool only while the pluginMarket service is mounted', async ()
     listVersionExemptions() { return { exemptions: {}, warnings: [] } }
   }
   await ctx.plugin(Manager)
+  await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
   await ctx.plugin(NativeToolExecutor)

@@ -1,4 +1,5 @@
 /** MCP admission, token retention, recovery files, and PTC forwarding together. */
+import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import { executeToolFixture, executeModelToolFixture } from '@deepseek-ai/dsh-tool-testkit'
 import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import * as PtcToolExecutor from '@deepseek-ai/dsh-tool-executor-ptc'
@@ -24,7 +25,7 @@ import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import { defineContentToolFixture } from '@deepseek-ai/dsh-tool-testkit'
 import LocalSpillStore from '@deepseek-ai/dsh-spill-local'
-import { PtcRuntime } from '@deepseek-ai/dsh-ptc-runtime'
+import { PtcInspectableValue, PtcRuntime } from '@deepseek-ai/dsh-ptc-runtime'
 import type { PtcRunRequest, PtcRunSpec, PtcRunResult } from '@deepseek-ai/dsh-ptc-runtime'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import * as SpillPolicy from '../src/index.ts'
@@ -75,6 +76,7 @@ async function setup(content: JsonValue[], maxInlineTokens: number, mode: 'nativ
   onTestFinished(async () => {
     try { await ctx.fiber.dispose() } finally { await rm(root, { recursive: true, force: true }) }
   })
+  await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
   await ctx.plugin(mode === 'ptc' ? PtcToolExecutor : NativeToolExecutor)
@@ -114,8 +116,12 @@ describe('multimodal spill', () => {
     const result = await execute()
     expect(result.isError).toBe(false)
     if (result.isError) throw new Error('expected MCP success')
-    expect(result.value).toEqual({ content: original })
     expect(result.content.map(block => block.type)).toEqual(['text', 'image', 'text', 'image', 'text'])
+    const [first, second] = result.content.filter((block): block is ImageBlock => block.type === 'image')
+    expect(result.value).toEqual({ content: [
+      original[0], { ...original[1] as object, attachment: first!.attachment },
+      original[2], { ...original[3] as object, attachment: second!.attachment }, original[4],
+    ] })
     const saved = await savedResult(result.content)
     expect(saved).toContain('B'.repeat(20000))
     expect(saved).not.toContain(PNG.toString('base64'))
@@ -207,7 +213,14 @@ describe('multimodal spill', () => {
         const binding = spec.bindings.find(item => item.global === 'tools')?.functions.inspect
         if (binding === undefined) throw new Error('missing inspect binding')
         if (failure) await expect(binding({})).rejects.toThrow('capture failed')
-        else expect(await binding({})).toEqual({ content: original })
+        else {
+          const resolved = await binding({})
+          // The omitted image stays JSON: its reference is not part of the finalized content.
+          const omitted: unknown = expect.objectContaining({ mediaType: 'image/png' })
+          expect(resolved instanceof PtcInspectableValue ? resolved.value : resolved).toEqual({ content: [
+            original[0], { ...original[1] as object, attachment: omitted }, original[2],
+          ] })
+        }
         return { output: [], value: 'complete' }
       }
     }

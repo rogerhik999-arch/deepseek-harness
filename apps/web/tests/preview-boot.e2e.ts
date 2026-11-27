@@ -48,7 +48,7 @@ import {
   buildVfsExampleFiles,
 } from '../../../packages/experimental/webworker-runtime/tests/vfs-example-fixture.ts'
 import { captureStableAria, compareOrRefreshGolden, webSnapshotMode } from './scaffold.ts'
-import { expandOwningTurnProcess, newEnglishPage, REPO_ROOT, saveFailureShot } from './support.ts'
+import { expandOwningTurnProcess, hideSessionPanel, newEnglishPage, REPO_ROOT, saveFailureShot, showSessionPanel } from './support.ts'
 
 const DIST_ROOT = fileURLToPath(new URL('../dist', import.meta.url))
 /** Optional bundles that compose a profile of their own; the Web plugin page hides them, the Host inventory still reports them. */
@@ -547,13 +547,10 @@ async function bootPreview(site: Site, manifest: ImageManifest, browser: Browser
     await preview.getByRole('heading', { name: 'Preview Workspace', exact: true }).waitFor({ state: 'visible' })
     expect(await preview.locator('[data-dockkit-tab-title]').allTextContents()).toEqual(['PREVIEW.md'])
 
-    const subagents = page.getByRole('button', { name: '2 subagents', exact: true })
-    await subagents.waitFor({ timeout: 15_000 })
-    await subagents.hover()
-    const catalog = page.getByRole('tree', { name: 'Subagent sessions' })
+    const catalog = (await showSessionPanel(page)).getByRole('tree', { name: 'Subagent sessions' })
     await catalog.getByRole('treeitem', { name: /Review preview architecture/ }).waitFor()
     await catalog.getByRole('treeitem', { name: /Continue preview verification/ }).waitFor()
-    await catalog.press('Escape')
+    await hideSessionPanel(page)
 
     // Auto-prefetch may already have published the page, and a pointer click can
     // land on whatever moved under it; activate the control only while it still
@@ -848,6 +845,39 @@ async function bootEmptyPreview(origin: string, browser: Browser): Promise<void>
       return body.result.value.items.length
     })
     expect(sessionCount).toBe(0)
+    const remoteStatus = await page.evaluate(async () => {
+      const transport = (globalThis as typeof globalThis & {
+        __DSH_TRANSPORT__?: { fetch(input: string, init: RequestInit): Promise<Response> }
+      }).__DSH_TRANSPORT__
+      if (transport === undefined) throw new Error('empty preview transport is absent after boot')
+      const response = await transport.fetch('/api/remoteConnection/status', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          type: 'client-request', rpcId: 'empty-preview-remote-status', method: 'remoteConnection/status',
+          payload: { args: { id: null } },
+        }),
+      })
+      const body = await response.json() as {
+        result: { ok: true; value: { url: string; availability: string; loginUrlAllowed: boolean; ticket: string; pollIntervalMs: number } }
+          | { ok: false; error: { message: string } }
+      }
+      if (!body.result.ok) throw new Error(`empty remoteConnection/status failed: ${body.result.error.message}`)
+      return body.result.value
+    })
+    expect(remoteStatus).toEqual({
+      url: 'http://127.0.0.1:3080', availability: 'unreachable-host', loginUrlAllowed: true, ticket: 'none', pollIntervalMs: 1000,
+    })
+    const pairingScript = await page.evaluate(async () => {
+      const transport = (globalThis as typeof globalThis & {
+        __DSH_TRANSPORT__?: { fetch(input: string, init: RequestInit): Promise<Response> }
+      }).__DSH_TRANSPORT__
+      if (transport === undefined) throw new Error('empty preview transport is absent after boot')
+      const response = await transport.fetch('/pairing/client.js', { method: 'GET' })
+      if (!response.ok) throw new Error(`preview pairing script returned ${String(response.status)}`)
+      return response.text()
+    })
+    await exercisePairingScript(browser, origin, pairingScript)
     expect(pageErrors.map(error => error.message)).toEqual([])
     // One accepted static-host 404: the open-in-app availability read has no
     // host routes — the controller publishes an empty list and the header
@@ -862,6 +892,40 @@ async function bootEmptyPreview(origin: string, browser: Browser): Promise<void>
     throw pageErrors.length === 0
       ? error
       : new AggregateError([error, ...pageErrors], 'empty preview boot failed, with uncaught page errors')
+  } finally {
+    await page.close()
+  }
+}
+
+/**
+ * Execute the script generated inside the packed Worker in an independent browser document.
+ * Its pairing responses are page-local fixtures; no Worker globals or Client loader reach the document.
+ * @param browser - browser running the preview acceptance.
+ * @param origin - unique static fixture origin.
+ * @param script - JavaScript returned by the packed plugin's public route.
+ */
+async function exercisePairingScript(browser: Browser, origin: string, script: string): Promise<void> {
+  const page = await newEnglishPage(browser)
+  const errors: Error[] = []
+  page.on('pageerror', (error) => { errors.push(error) })
+  try {
+    await page.route(`${origin}/pairing-script-check`, route => route.fulfill({
+      contentType: 'text/html', body: '<!doctype html><html><body><dsh-device-pairing></dsh-device-pairing></body></html>',
+    }))
+    await page.route(`${origin}/pairing/request`, route => route.fulfill({ json: {
+      ...(route.request().postDataJSON() as { id: string; secret: string }), code: 'ABCD2345',
+      authority: origin, sourceIp: null, expiresInMs: 30000, pollIntervalMs: 1000,
+    } }))
+    await page.route(`${origin}/pairing/status`, route => route.fulfill({ json: { status: 'pending' } }))
+    await page.route(`${origin}/pairing/cancel`, route => route.fulfill({ json: { status: 'cancelled' } }))
+    await page.goto(`${origin}/pairing-script-check`)
+    await page.addScriptTag({ content: script })
+    expect(await page.evaluate(() => '__ModuleLoader__' in window)).toBe(false)
+    await page.locator('#auth-pair-request').click()
+    await expect.poll(() => page.locator('#auth-pair-code').textContent()).toBe('ABCD 2345')
+    await page.locator('#auth-pair-cancel').click()
+    await expect.poll(() => page.locator('#auth-pair-panel').getAttribute('data-state')).toBe('cancelled')
+    expect(errors.map(error => error.message)).toEqual([])
   } finally {
     await page.close()
   }

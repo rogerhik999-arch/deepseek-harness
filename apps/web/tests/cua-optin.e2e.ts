@@ -28,15 +28,16 @@ it.skipIf(process.platform !== 'darwin').each([
     const patch = join(directory, 'native-fixture.yml')
     // Permission inspection fails against this non-helper executable; activation still permits dismissing setup.
     await writeFile(patch, JSON.stringify([{ id: 'cua-macos', config: { helperPath: process.execPath } }]))
-    const defaults = join(directory, 'script-defaults')
-    if (script) {
-      await mkdir(defaults)
-      await writeFile(join(defaults, 'package.json'), JSON.stringify({ name: 'cua-script-defaults', version: '1.0.0', dsh: { bundle: { patch: 'cordis.patch.yml' } } }))
-      await writeFile(join(defaults, 'cordis.patch.yml'), '- id: ptc-runtime\n  config:\n    executionMode: vm-script\n    scriptPersistence: false\n')
-    }
+    // Both variants start without retained state so that the persistent-mode action has an effect.
+    const defaults = join(directory, 'ptc-defaults')
+    await mkdir(defaults)
+    await writeFile(join(defaults, 'package.json'), JSON.stringify({ name: 'cua-ptc-defaults', version: '1.0.0', dsh: { bundle: { patch: 'cordis.patch.yml' } } }))
+    await writeFile(join(defaults, 'cordis.patch.yml'), script
+      ? '- id: ptc-runtime\n  config:\n    executionMode: vm-script\n    scriptPersistence: false\n'
+      : '- id: ptc-runtime\n  config:\n    executionMode: per-call\n')
     const harnessHome = join(directory, 'home')
     const scaffold = ownedScaffold = await launchWebScaffold({
-      profile: { packages: script ? [{ dir: defaults, enabled: true }] : [] },
+      profile: { packages: [{ dir: defaults, enabled: true }] },
       harnessHome, extraOverlayPath: [
         fileURLToPath(new URL('./pin-browse-picker.overlay.yml', import.meta.url)), patch,
       ] })
@@ -112,7 +113,8 @@ it.skipIf(process.platform !== 'darwin').each([
     expect(await card.getByText('实验性', { exact: true }).count()).toBe(1)
     expect(await card.textContent()).not.toContain('将 PTC 模式改为可持久化')
     expect(await card.textContent()).not.toContain('请切换到 PTC 模式')
-    expect(await card.textContent()).toContain('通过 npm 安装 DSH 的 Windows 用户需要单独配置 helper')
+    expect(await card.textContent()).toContain('允许 agent 直接操作电脑上的应用程序。')
+    expect(await card.textContent()).not.toContain('helper')
     expect(await card.textContent()).not.toContain('Swift')
     const description = await card.getByRole('button', { name: '查看 Computer Use', exact: true }).evaluate((button) => {
       const element = document.getElementById(button.getAttribute('aria-describedby')!)!
@@ -175,7 +177,12 @@ it.skipIf(process.platform !== 'darwin').each([
     expect(scaffold.ctx.agentPresets.composedPreset(fresh.ctx)).toBe('ptc')
     expect(scaffold.ctx.tools.schemas(fresh).some(tool => tool.name === 'cua')).toBe(true)
     await card.getByRole('button', { name: '查看 Computer Use', exact: true }).click()
-    await plugins.locator('[data-detail-document]').getByText('helperPath', { exact: true }).waitFor()
+    const detail = plugins.locator('[data-detail-document]')
+    await detail.getByRole('img', { name: '将会议要点填入备忘录的指令和输入结果' }).waitFor()
+    const guidance = plugins.locator('[data-cua-guidance]')
+    await guidance.getByText(/请谨慎在生产环境中使用/).waitFor()
+    expect(await guidance.textContent()).not.toContain('helperPath')
+    expect(await detail.textContent()).not.toContain('PTC')
     toggle = page.locator('[data-plugin-panel]').getByRole('switch', { name: '启用 Computer Use', exact: true })
     const persistent = page.getByRole('group', { name: 'PTC 执行方式', exact: true })
     if (!codingTools) {

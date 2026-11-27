@@ -32,7 +32,7 @@ async function opened(config: Parameters<typeof bench>[1] = {}): Promise<{ opene
 
 function review(headSha: string, path = 'src/a.ts'): ForgeReviewData {
   return {
-    headSha, viewer: 'octo', truncated: false, pendingReview: null, viewerCanReview: true,
+    headSha, viewer: 'octo', truncated: false, pendingReview: null, viewerCanReview: true, reviewEvents: ['comment', 'approve', 'request-changes'],
     threads: [{
       id: 'thread-1' as ForgeThreadId, path, side: 'R', subject: 'line', resolved: false, diffHunk: '@@ -1 +1 @@\n-old\n+new',
       current: { commit: headSha, startLine: 1, endLine: 1 }, original: { commit: headSha, startLine: 1, endLine: 1 }, comments: [],
@@ -81,7 +81,7 @@ describe('forgePanel change request reviews', () => {
     expect(readReview).toHaveBeenCalledTimes(1)
 
     panel.provider.overrides.set(7, { updatedAt: '2026-11-07T05:00:00Z' })
-    await panel.ctx.forgePanel.refresh(panel.session, signal)
+    await panel.ctx.forgePanel.refresh(panel.session.id, signal)
     await follower.until(state => polledAt(state, pullUrl(7), HEAD, '2026-11-07T05:00:00Z'))
     readReview.mockResolvedValueOnce(review(HEAD, 'src/b.ts'))
     await expect(panel.ctx.forgePanel.changeRequestReview(panel.session, pullUrl(7), HEAD, false, signal))

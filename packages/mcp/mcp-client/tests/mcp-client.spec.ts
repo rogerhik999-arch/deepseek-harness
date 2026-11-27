@@ -1,3 +1,4 @@
+import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import { executeToolFixture } from '@deepseek-ai/dsh-tool-testkit'
 import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
@@ -59,6 +60,7 @@ function createMockClient(tools: MockTool[], callResult: MockCallResult = { cont
 
 async function mountRegistry(): Promise<Context> {
   const ctx = new Context()
+  await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
   await ctx.plugin(NativeToolExecutor)
@@ -463,7 +465,10 @@ describe('tool execution', () => {
     expect(JSON.stringify(result.content)).not.toContain('AQ==')
     expect(JSON.stringify(result.content)).not.toContain('Ag==')
     if (result.isError) throw new Error('expected MCP success')
-    expect(result.value).toEqual({ content: blocks })
+    expect(result.value).toEqual({ content: [
+      blocks[0], { ...blocks[1], attachment: firstImage.attachment },
+      blocks[2], { ...blocks[3], attachment: secondImage.attachment }, blocks[4],
+    ] })
   })
 
   it('keeps a valid raw image result while explicitly refusing it without a durable route', async () => {
@@ -707,7 +712,9 @@ describe('tool execution', () => {
       expect(result.content.map(block => block.type)).toEqual(['text', 'image'])
       expect(textAt(result.content)).toBe('long text'.repeat(1000).slice(0, 20))
       if (result.isError) throw new Error('expected MCP success')
-      expect(result.value).toEqual({ content: blocks })
+      const image = result.content[1]
+      if (image?.type !== 'image') throw new Error('expected the admitted image')
+      expect(result.value).toEqual({ content: [blocks[0], { ...blocks[1], attachment: image.attachment }] })
     } finally {
       await rich.ctx.fiber.dispose()
     }
